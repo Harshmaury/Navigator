@@ -1,0 +1,19 @@
+name: navigator
+id: navigator
+type: web-api
+language: go
+version: 0.1.0
+keywords:
+  - navigator
+  - observer
+  - topology
+capabilities:
+  - workspace-topology
+  - project-graph
+  - dependency-view
+depends_on:
+  - atlas
+  - nexus
+runtime:
+  provider: process
+  port: 8084
