@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Harshmaury/Canon/identity"
 	"github.com/Harshmaury/Navigator/internal/topology"
 )
 
@@ -33,10 +34,21 @@ func NewAtlasCollector(baseURL, serviceToken string) *AtlasCollector {
 }
 
 // Collect fetches projects and graph edges from Atlas and builds a Graph.
-func (c *AtlasCollector) Collect(ctx context.Context) *topology.Graph {
-	projects := c.fetchProjects(ctx)
-	edges := c.fetchEdges(ctx)
+// traceID is the collection-cycle trace ID for X-Trace-ID propagation (FEAT-002).
+func (c *AtlasCollector) Collect(ctx context.Context, traceID string) *topology.Graph {
+	projects := c.fetchProjects(ctx, traceID)
+	edges := c.fetchEdges(ctx, traceID)
+	graph := buildGraph(projects, edges)
 
+	c.mu.Lock()
+	c.graph = graph
+	c.mu.Unlock()
+
+	return graph
+}
+
+// buildGraph assembles a Graph from raw Atlas project maps and edges.
+func buildGraph(projects []map[string]any, edges []*topology.Edge) *topology.Graph {
 	nodes := make([]*topology.Node, 0, len(projects))
 	for _, p := range projects {
 		caps := toStringSlice(p["capabilities"])
@@ -70,11 +82,6 @@ func (c *AtlasCollector) Collect(ctx context.Context) *topology.Graph {
 			graph.Summary.UnverifiedCount++
 		}
 	}
-
-	c.mu.Lock()
-	c.graph = graph
-	c.mu.Unlock()
-
 	return graph
 }
 
@@ -86,8 +93,8 @@ func (c *AtlasCollector) GetGraph() *topology.Graph {
 }
 
 // fetchProjects calls Atlas GET /workspace/projects.
-func (c *AtlasCollector) fetchProjects(ctx context.Context) []map[string]any {
-	resp, err := c.get(ctx, "/workspace/projects")
+func (c *AtlasCollector) fetchProjects(ctx context.Context, traceID string) []map[string]any {
+	resp, err := c.get(ctx, "/workspace/projects", traceID)
 	if err != nil {
 		return nil
 	}
@@ -104,8 +111,8 @@ func (c *AtlasCollector) fetchProjects(ctx context.Context) []map[string]any {
 }
 
 // fetchEdges calls Atlas GET /workspace/graph for relationship edges.
-func (c *AtlasCollector) fetchEdges(ctx context.Context) []*topology.Edge {
-	resp, err := c.get(ctx, "/workspace/graph")
+func (c *AtlasCollector) fetchEdges(ctx context.Context, traceID string) []*topology.Edge {
+	resp, err := c.get(ctx, "/workspace/graph", traceID)
 	if err != nil {
 		return nil
 	}
@@ -137,13 +144,17 @@ func (c *AtlasCollector) fetchEdges(ctx context.Context) []*topology.Edge {
 }
 
 // get performs an authenticated GET against the Atlas API.
-func (c *AtlasCollector) get(ctx context.Context, path string) (*http.Response, error) {
+// Sets X-Service-Token and X-Trace-ID per-request (ADR-008, FEAT-002).
+func (c *AtlasCollector) get(ctx context.Context, path, traceID string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return nil, err
 	}
 	if c.serviceToken != "" && path != "/health" {
-		req.Header.Set("X-Service-Token", c.serviceToken)
+		req.Header.Set(identity.ServiceTokenHeader, c.serviceToken)
+	}
+	if traceID != "" {
+		req.Header.Set(identity.TraceIDHeader, traceID)
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

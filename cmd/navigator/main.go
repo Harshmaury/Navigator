@@ -12,6 +12,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -36,30 +38,54 @@ func main() {
 	logger.Println("Navigator stopped cleanly")
 }
 
-func run(logger *log.Logger) error {
-	// ── 1. CONFIG ────────────────────────────────────────────────────────────
-	httpAddr     := config.EnvOrDefault("NAVIGATOR_HTTP_ADDR", config.DefaultHTTPAddr)
-	atlasAddr    := config.EnvOrDefault("ATLAS_HTTP_ADDR", config.DefaultAtlasAddr)
-	serviceToken := config.EnvOrDefault("NAVIGATOR_SERVICE_TOKEN", "")
-	if serviceToken == "" {
+// navigatorConfig holds resolved runtime configuration.
+type navigatorConfig struct {
+	httpAddr     string
+	atlasAddr    string
+	serviceToken string
+}
+
+// loadConfig reads environment variables and logs warnings.
+func loadConfig(logger *log.Logger) navigatorConfig {
+	cfg := navigatorConfig{
+		httpAddr:     config.EnvOrDefault("NAVIGATOR_HTTP_ADDR", config.DefaultHTTPAddr),
+		atlasAddr:    config.EnvOrDefault("ATLAS_HTTP_ADDR", config.DefaultAtlasAddr),
+		serviceToken: config.EnvOrDefault("NAVIGATOR_SERVICE_TOKEN", ""),
+	}
+	if cfg.serviceToken == "" {
 		logger.Println("WARNING: NAVIGATOR_SERVICE_TOKEN not set — upstream auth disabled")
 	}
+	return cfg
+}
+
+func run(logger *log.Logger) error {
+	cfg := loadConfig(logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	// ── 2. COLLECTOR ─────────────────────────────────────────────────────────
-	atlasColl := collector.NewAtlasCollector(atlasAddr, serviceToken)
+	atlasColl := collector.NewAtlasCollector(cfg.atlasAddr, cfg.serviceToken)
 
 	// ── 3. INITIAL COLLECTION ────────────────────────────────────────────────
-	g := atlasColl.Collect(ctx)
+	g := atlasColl.Collect(ctx, newTraceID())
 	logger.Printf("✓ Navigator ready — http=%s atlas=%s nodes=%d edges=%d",
-		httpAddr, atlasAddr, len(g.Nodes), len(g.Edges))
+		cfg.httpAddr, cfg.atlasAddr, len(g.Nodes), len(g.Edges))
 
-	// ── 4. HTTP SERVER ───────────────────────────────────────────────────────
-	srv := api.NewServer(httpAddr, atlasColl, logger)
+	return serveAndWait(ctx, cancel, sigCh, cfg.httpAddr, atlasColl, logger)
+}
 
+// serveAndWait starts the HTTP server and polling loop, blocks until shutdown.
+func serveAndWait(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	sigCh <-chan os.Signal,
+	httpAddr string,
+	atlasColl *collector.AtlasCollector,
+	logger *log.Logger,
+) error {
+	srv  := api.NewServer(httpAddr, atlasColl, logger)
 	var wg sync.WaitGroup
 	errCh := make(chan error, 1)
 
@@ -71,25 +97,9 @@ func run(logger *log.Logger) error {
 		}
 	}()
 
-	// ── 5. POLLING LOOP ───────────────────────────────────────────────────────
 	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				g := atlasColl.Collect(ctx)
-				logger.Printf("topology refreshed — nodes=%d edges=%d verified=%d",
-					len(g.Nodes), len(g.Edges), g.Summary.VerifiedCount)
-			}
-		}
-	}()
+	go startPollingLoop(ctx, &wg, atlasColl, logger)
 
-	// ── WAIT FOR SHUTDOWN ─────────────────────────────────────────────────────
 	select {
 	case sig := <-sigCh:
 		logger.Printf("received %s — shutting down", sig)
@@ -102,4 +112,35 @@ func run(logger *log.Logger) error {
 	go func() { wg.Wait(); close(done) }()
 	<-done
 	return nil
+}
+
+// startPollingLoop refreshes the topology graph every 15 seconds.
+func startPollingLoop(
+	ctx context.Context,
+	wg *sync.WaitGroup,
+	atlasColl *collector.AtlasCollector,
+	logger *log.Logger,
+) {
+	defer wg.Done()
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			g := atlasColl.Collect(ctx, newTraceID())
+			logger.Printf("topology refreshed — nodes=%d edges=%d verified=%d",
+				len(g.Nodes), len(g.Edges), g.Summary.VerifiedCount)
+		}
+	}
+}
+
+// newTraceID generates a random trace ID for collection cycles (FEAT-002).
+func newTraceID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("nv-%d", time.Now().UnixNano())
+	}
+	return "nv-" + hex.EncodeToString(b)
 }
