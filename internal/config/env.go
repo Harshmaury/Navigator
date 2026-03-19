@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	DefaultHTTPAddr  = ":8084"
+	DefaultHTTPAddr  = "127.0.0.1:8084"
 	DefaultNexusAddr = "http://127.0.0.1:8080"
 	DefaultAtlasAddr = "http://127.0.0.1:8081"
 )
