@@ -1,32 +1,30 @@
-# WORKFLOW-SESSION.md
-# Session: NV-phase1-navigator-observer
-# Date: 2026-03-17
+# WORKFLOW SESSION — ENGX-NAVIGATOR-P1-001
 
-## What changed — Navigator Phase 1 (ADR-012)
+**Date:** 2026-03-21
+**Repo:** Navigator
+**Requires:** ENGX-HERALD-P1-001 applied and pushed first
 
-New topology observer. Polls Atlas and exposes workspace graph via
-GET /topology/graph, /topology/project/:id, /topology/summary.
+## What changed
 
-## New project: ~/workspace/projects/apps/navigator
+ADR-039: all raw HTTP collector calls replaced with Herald typed clients.
+Raw httpClient fields removed. Anonymous struct decodes eliminated.
+Schema drift on upstream API changes now caught at compile time.
 
-## Setup and run
+## Apply
 
-mkdir -p ~/workspace/projects/apps/navigator
-cd ~/workspace/projects/apps/navigator
-unzip -o /mnt/c/Users/harsh/Downloads/engx-drop/navigator-phase1-observer-20260317.zip -d .
-go mod tidy && go build ./...
-go install ./cmd/navigator/ && cp ~/go/bin/navigator ~/bin/navigator
-NAVIGATOR_SERVICE_TOKEN=7d5fcbe4-44b9-4a8f-8b79-f80925c1330e navigator &
+```bash
+cd ~/workspace/projects/engx/services/navigator
+unzip -o /mnt/c/Users/harsh/Downloads/engx-drop/ENGX-NAVIGATOR-P1-001.zip -d .
+go build ./...
+git add internal/collector/
+git commit -m "feat(navigator): ADR-039 — Herald migration for all collectors"
+git push origin main
+```
 
 ## Verify
 
-curl -s http://127.0.0.1:8084/health
-curl -s http://127.0.0.1:8084/topology/summary | jq '.data'
-curl -s http://127.0.0.1:8084/topology/graph | jq '.data.nodes[] | {id, status}'
-curl -s http://127.0.0.1:8084/topology/project/nexus | jq '.data'
-
-## Commit
-
-git init && git add . && \
-git commit -m "feat: navigator observer phase 1 (ADR-012)" && \
-git tag v0.1.0-phase1
+```bash
+go build ./...
+go test ./...
+engx doctor
+```
