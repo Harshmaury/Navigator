@@ -2,7 +2,7 @@ name: navigator
 id: navigator
 type: web-api
 language: go
-version: 0.1.0-phase1
+version: 0.1.0
 keywords:
   - navigator
   - observer
