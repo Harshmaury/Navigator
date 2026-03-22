@@ -53,7 +53,10 @@ func loadConfig(logger *log.Logger) navigatorConfig {
 		serviceToken: config.EnvOrDefault("NAVIGATOR_SERVICE_TOKEN", ""),
 	}
 	if cfg.serviceToken == "" {
-		logger.Println("WARNING: NAVIGATOR_SERVICE_TOKEN not set — upstream auth disabled")
+				if os.Getenv("ENGX_AUTH_REQUIRED") == "true" {
+			logger.Fatalf("FATAL: ENGX_AUTH_REQUIRED=true but NAVIGATOR_SERVICE_TOKEN not set — refusing to start insecurely. Set NAVIGATOR_SERVICE_TOKEN in ~/.nexus/service-tokens or disable with ENGX_AUTH_REQUIRED=false")
+		}
+		logger.Println("WARNING: NAVIGATOR_SERVICE_TOKEN not set — inter-service auth disabled. Set ENGX_AUTH_REQUIRED=true to enforce strict mode.")
 	}
 	return cfg
 }
